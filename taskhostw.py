@@ -5,6 +5,7 @@ from utils import log, monster_load, character_load
 from settings_test import (BASE_DIR, INNER_CROP_PX, DEBUG, CHAT_CROP_PX, IMSHOW_SCALE)
 from key_schedule import KeyScheduler
 from capture_pw import WindowCapturerPW
+from win10toast_click import ToastNotifier
 
 monster_load(); character_load()  # 몬스터/캐릭터 데이터 강제 로드
 
@@ -17,6 +18,10 @@ def safe_out_path(filename: str = "ocr_screenshot.png") -> str:
 
 def main():
     log("단일 프로세스 시작 (ESC 종료). '*' 시작/재개, '-' 일시정지",True)
+    
+    toaster = ToastNotifier()
+    toaster.show_toast("알림 발생! 작업을 시작합니다.", duration=5) # 5초 동안 표시
+
 
     # ===== 경로 설정 =====
     out_path = safe_out_path("ocr_screenshot.png")

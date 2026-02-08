@@ -1,12 +1,12 @@
 ### utils.py
-import time, os, io
+import time, os, io, requests
+from win10toast_click import ToastNotifier
 import cv2, easyocr, torch
 import asyncio, telegram, threading, pyperclip, keyboard
 import numpy as np
 from PIL import Image
 from typing import Optional, Set, Tuple
 from settings_test import (TELEGRAM_BOT, CHAT_ID, MONSTER_BAND_BOTTOM, MONSTER_BAND_TOP)
-
 LOG_FILE = os.path.join(os.getcwd(), "log.txt")
 MAX_SIDE    = 10_000           # 텔레그램 한 변 최대
 MAX_PIXELS  = 10_000_000       # 총 픽셀수 제한
@@ -18,7 +18,7 @@ ocr_status = False
 # easyocr (광학 문자 감지 - Optimal Character Recognition) 설정
 easyocr_reader = easyocr.Reader(['ko', 'en'], gpu=True)
 
-sift = cv2.SIFT_create(nfeatures=600, contrastThreshold=0.02, edgeThreshold=10)
+sift = cv2.SIFT_create(nfeatures=600, contrastThreshold=0.02, edgeThreshold=15)
 bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
 
 MONSTER_DIR = "monster"
@@ -33,20 +33,12 @@ def log(msg: str, save = False):
     """간단한 로그 함수: [HH:MM:SS] msg 형식으로 찍음"""
     t = time.strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{t}] {msg}"
-    print(formatted)
     if save:
         try:
             with open(LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(formatted + "\n")
         except Exception as e:
             print(f"[LOG ERROR] 파일 저장 실패: {e}")
-
-def debug_cuda():
-    log(f"torch.cuda.is_available() = {torch.cuda.is_available()}", save=True)
-    log(f"torch.version.cuda = {torch.version.cuda}", save=True)
-    log(f"torch.cuda.device_count() = {torch.cuda.device_count()}", save=True)
-    if torch.cuda.is_available():
-        log(f"torch.cuda.get_device_name(0) = {torch.cuda.get_device_name(0)}", save=True)
 
 """easyocr: 거짓말 탐지기 감지 """
 def ocr_lie_detector(roi_bgr: np.ndarray):
@@ -68,6 +60,10 @@ def ocr_lie_detector(roi_bgr: np.ndarray):
         #log(f"[EasyOCR] 결과: {detected} | 인식텍스트: {text}")
 
         if detected:
+            toaster = ToastNotifier()
+            toaster.show_toast("알림 발생!",
+                            "작업이 완료되었습니다. 확인해 보세요.",
+                            duration=5) # 5초 동안 표시
             log(f"{detected} | text: {text}", True)
             send_message("거짓말 탐지기 의심 단어 발생!!!")
 
@@ -187,13 +183,26 @@ async def recv_one_message(
                     #print(f"[TG] from {chat_id}: {text!r}")
                     send_chat_copy(text)
                     return chat_id, text
+###
+#def send_message(txt):
+#    try:
+#        bot = telegram.Bot(TELEGRAM_BOT)
+#        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=txt))
+#    except Exception as e:
+#        log(f"[Telegram error]: {e}", True)
+###
 
 def send_message(txt):
+    token = TELEGRAM_BOT
+    chat_id = CHAT_ID
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": txt}
+    
     try:
-        bot = telegram.Bot(TELEGRAM_BOT)
-        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=txt))
+        # timeout을 짧게 설정해서 프로그램이 멈추는 걸 방지
+        requests.post(url, json=payload, timeout=5)
     except Exception as e:
-        log(f"[Telegram error]: {e}", True)
+        print(f"Error: {e}")
 
 def send_chat_copy(text):
     keyboard.press_and_release('enter')
@@ -364,8 +373,7 @@ def monster_match_direction(roi_gray, debug=False):
                     best_point_x, _ = kp_roi[best_match.trainIdx].pt
 
                 if best_score >= THRESHOLD and best_point_x is not None:
+                    #print(f"{monster_name:15s} / {tpl['file']:15s}  good={score}")
                     return "right" if best_point_x > center_x else "left"
     #log(f"몬스터 매칭 실패! best_score={best_score}")
     return None
-
-debug_cuda()

@@ -15,7 +15,8 @@ from settings_test import (
     USER_ALERT,
     SKILL_RADIUS,
     MONSTER_BAND_TOP,
-    MONSTER_BAND_BOTTOM
+    MONSTER_BAND_BOTTOM,
+    MONSTER_CHECK
 )
 _last_ocr_ts = 0
 
@@ -185,7 +186,7 @@ class WindowCapturerPW:
         self._ = 0.0
         self.yellow_gui = bool(yellow_gui)
         self._last_monster_ts = 0.0
-        self.monster_cooldown = 0.25  # 0.15~0.5 사이 취향
+        self.monster_cooldown = 0.20  # 0.15~0.5 사이 취향
 
     # --- getters (락 보호) ---
     def get_roi_screen_rect(self):
@@ -280,125 +281,127 @@ class WindowCapturerPW:
             global _last_ocr_ts
             with mss.mss() as sct:
                 while not self.stop_event.is_set():
-                    chat_roi = None
-                    # 1) HWND 확인/갱신
-                    if not self._hwnd or not win32gui.IsWindow(self._hwnd):
-                        self._hwnd = _find_hwnd(self.title_sub)
-                        if not self._hwnd:
-                            time.sleep(0.05); continue
+                    now_m = time.monotonic()
+                    if now_m - self._last_monster_ts >= self.monster_cooldown:
+                        chat_roi = None
+                        # 1) HWND 확인/갱신
+                        if not self._hwnd or not win32gui.IsWindow(self._hwnd):
+                            self._hwnd = _find_hwnd(self.title_sub)
+                            if not self._hwnd:
+                                time.sleep(0.05); continue
 
-                    # 2) 캡처
-                    full, base_left, base_top = _capture_mss(sct, self._hwnd, self.client_only)
-                    if full is None:
-                        time.sleep(0.01); continue
+                        # 2) 캡처
+                        full, base_left, base_top = _capture_mss(sct, self._hwnd, self.client_only)
+                        if full is None:
+                            time.sleep(0.01); continue
 
-                    h, w = full.shape[:2]
-                    # 3) ROI 계산
-                    if self.region_px:
-                        rx, ry, rw, rh = self.region_px
-                    else:
-                        x1p, y1p, x2p, y2p = self.region_pct
-                        rx = int(w * x1p); ry = int(h * y1p)
-                        rw = int(w * (x2p - x1p)); rh = int(h * (y2p - y1p))
+                        h, w = full.shape[:2]
+                        # 3) ROI 계산
+                        if self.region_px:
+                            rx, ry, rw, rh = self.region_px
+                        else:
+                            x1p, y1p, x2p, y2p = self.region_pct
+                            rx = int(w * x1p); ry = int(h * y1p)
+                            rw = int(w * (x2p - x1p)); rh = int(h * (y2p - y1p))
 
-                    x1 = 0 if rx < 0 else rx
-                    y1 = 0 if ry < 0 else ry
-                    x2 = min(w, x1 + rw)
-                    y2 = min(h, y1 + rh)
-                    if x2 <= x1 or y2 <= y1:
-                        continue
-                    roi = full[y1:y2, x1:x2]  # copy 제거(미리보기만이면 굳이 복사 X)
+                        x1 = 0 if rx < 0 else rx
+                        y1 = 0 if ry < 0 else ry
+                        x2 = min(w, x1 + rw)
+                        y2 = min(h, y1 + rh)
+                        if x2 <= x1 or y2 <= y1:
+                            continue
+                        roi = full[y1:y2, x1:x2]  # copy 제거(미리보기만이면 굳이 복사 X)
 
-                    now = time.monotonic()
-                    #roi_copy = roi[y1:y2, x1:x2].copy()
-                    if now - _last_ocr_ts >= 1 and SET_TELEGRAM:
-                        h = roi.shape[0]
-                        cut = int(h * 0.725)
-                        roi_for_ocr = roi[:cut, :].copy()
-                        threading.Thread(
-                            target=ocr_lie_detector,
-                            args=(roi_for_ocr,),
-                            daemon=True
-                        ).start()
-                        _last_ocr_ts = now  # 타임스탬프 업데이트
+                        now = time.monotonic()
+                        #roi_copy = roi[y1:y2, x1:x2].copy()
+                        if now - _last_ocr_ts >= 1 and SET_TELEGRAM:
+                            h = roi.shape[0]
+                            cut = int(h * 0.725)
+                            roi_for_ocr = roi[:cut, :].copy()
+                            threading.Thread(
+                                target=ocr_lie_detector,
+                                args=(roi_for_ocr,),
+                                daemon=True
+                            ).start()
+                            _last_ocr_ts = now  # 타임스탬프 업데이트
 
-                    with self._lock:
-                        self._last_roi_screen_rect = {
-                            "left": base_left + x1, "top": base_top + y1,
-                            "width": (x2 - x1), "height": (y2 - y1),
-                        }
+                        with self._lock:
+                            self._last_roi_screen_rect = {
+                                "left": base_left + x1, "top": base_top + y1,
+                                "width": (x2 - x1), "height": (y2 - y1),
+                            }
 
-                    # 4) (옵션) 미니맵 노란점 탐지: N프레임마다
-                    self._frame_idx += 1
-                    if self.enable_inner_detect and self.inner_crop_px and (self._frame_idx % self.inner_detect_every == 0):
-                        sx, sy, sw, sh = self.inner_crop_px
-                        sx = max(0, sx); sy = max(0, sy)
-                        ex = min(roi.shape[1], sx + sw)
-                        ey = min(roi.shape[0], sy + sh)
-                        if ex > sx and ey > sy:
-                            inner = roi[sy:ey, sx:ex]
-                            if self.yellow_gui:
-                                inner_copy = roi[sy:ey, sx:ex].copy()
-                                with self._lock:
-                                    self._last_roi_frame = roi            # 전체 ROI
-                                    self._last_inner_frame = inner_copy        # INNER
-                            
-                            cen = self._find_yellow_center_bgr(inner)
-                            if cen:
-                                cx, cy = cen
-                               
-                                with self._lock:
-                                    self._last_inner_roi_rect = {
-                                        "left": base_left + sx,
-                                        "top":  base_top  + sy,
-                                        "width": (ex - sx), "height": (ey - sy),
-                                    }
-                                    self._last_yellow_screen = (
-                                        int(base_left + sx + cx),
-                                        int(base_top  + sy + cy),
-                                    )
-                                now_m = time.monotonic()
-                                if not self._monster_busy and (now_m - self._last_monster_ts >= self.monster_cooldown):
-                                    self._monster_busy = True
-                                    roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                                    roi_copy = roi_gray.copy()
-                                    threading.Thread(
-                                        target=self._async_update_monster,
-                                        args=(roi_copy, SKILL_RADIUS),
-                                        daemon=True
-                                    ).start()
-                                with self._lock:
-                                    cur = self._monster_existence
-                            user = self._find_red_user_bgr(inner)
-                            if user and SET_TELEGRAM and USER_ALERT:
-                                chat_roi = WindowCapturerPW._get_chat_section(roi, self.chat_crop_px) \
-                                    if (self.enable_red_detect and self.chat_crop_px and (self._frame_idx % self.red_detect_every == 0)) else None
-                                now_ts = time.time()
-                                try:
-                                    if now_ts - self._last_white_send_ts >= self.white_alert_cooldown\
-                                    and not chat_roi is None:
-                                        # 메세지 내용은 원하는 대로                                        
+                        # 4) (옵션) 미니맵 노란점 탐지: N프레임마다
+                        self._frame_idx += 1
+                        if self.enable_inner_detect and self.inner_crop_px and (self._frame_idx % self.inner_detect_every == 0):
+                            sx, sy, sw, sh = self.inner_crop_px
+                            sx = max(0, sx); sy = max(0, sy)
+                            ex = min(roi.shape[1], sx + sw)
+                            ey = min(roi.shape[0], sy + sh)
+                            if ex > sx and ey > sy:
+                                inner = roi[sy:ey, sx:ex]
+                                if self.yellow_gui:
+                                    inner_copy = roi[sy:ey, sx:ex].copy()
+                                    with self._lock:
+                                        self._last_roi_frame = roi            # 전체 ROI
+                                        self._last_inner_frame = inner_copy        # INNER
+                                
+                                cen = self._find_yellow_center_bgr(inner)
+                                if cen:
+                                    cx, cy = cen
+                                
+                                    with self._lock:
+                                        self._last_inner_roi_rect = {
+                                            "left": base_left + sx,
+                                            "top":  base_top  + sy,
+                                            "width": (ex - sx), "height": (ey - sy),
+                                        }
+                                        self._last_yellow_screen = (
+                                            int(base_left + sx + cx),
+                                            int(base_top  + sy + cy),
+                                        )
+                                    
+                                    if not self._monster_busy and MONSTER_CHECK:
+                                        self._monster_busy = True
+                                        roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                                        roi_copy = roi_gray.copy()
                                         threading.Thread(
-                                            target=lambda: asyncio.run(
-                                                utils.send_photo_safe(
-                                                    TELEGRAM_BOT, CHAT_ID,
-                                                    chat_roi,
-                                                    "미리보기"
-                                                )
-                                            ),
+                                            target=self._async_update_monster,
+                                            args=(roi_copy, SKILL_RADIUS),
                                             daemon=True
                                         ).start()
-                                        self._last_white_send_ts = now_ts
-                                        threading.Thread(
-                                            target=lambda: utils.recv_one_message_blocking(
-                                                TELEGRAM_BOT,
-                                                allowed_chat_ids=None,
-                                                wait_for_next_only=True
-                                            ),
-                                            daemon=True
-                                        ).start()
-                                except Exception as _e:
-                                    log(f"[WHITE] telegram err: {_e}", True)
+                                    with self._lock:
+                                        cur = self._monster_existence
+                                user = self._find_red_user_bgr(inner)
+                                if user and SET_TELEGRAM and USER_ALERT:
+                                    chat_roi = WindowCapturerPW._get_chat_section(roi, self.chat_crop_px) \
+                                        if (self.enable_red_detect and self.chat_crop_px and (self._frame_idx % self.red_detect_every == 0)) else None
+                                    now_ts = time.time()
+                                    try:
+                                        if now_ts - self._last_white_send_ts >= self.white_alert_cooldown\
+                                        and not chat_roi is None:
+                                            # 메세지 내용은 원하는 대로                                        
+                                            threading.Thread(
+                                                target=lambda: asyncio.run(
+                                                    utils.send_photo_safe(
+                                                        TELEGRAM_BOT, CHAT_ID,
+                                                        chat_roi,
+                                                        "미리보기"
+                                                    )
+                                                ),
+                                                daemon=True
+                                            ).start()
+                                            self._last_white_send_ts = now_ts
+                                            threading.Thread(
+                                                target=lambda: utils.recv_one_message_blocking(
+                                                    TELEGRAM_BOT,
+                                                    allowed_chat_ids=None,
+                                                    wait_for_next_only=True
+                                                ),
+                                                daemon=True
+                                            ).start()
+                                    except Exception as _e:
+                                        log(f"[WHITE] telegram err: {_e}", True)
 
                     # 5) (옵션) 저장 — 느리므로 필요할 때만
                     if self.enable_save:

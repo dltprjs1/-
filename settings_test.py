@@ -87,6 +87,8 @@ USER_ALERT = bool(cfg.get("SET_USER_ALERT", False))
 DEBUG = bool(cfg["DEBUG"])
 RANDOM_STAGE = bool(cfg["RANDOM_STAGE"])
 RANDOM_PATH = bool(cfg["RANDOM_PATH"])
+MONSTER_CHECK = bool(cfg["MONSTER_CHECK"])
+SPACE = bool(cfg["SPACE"])
 
 MONSTER_BAND_TOP = int(cfg["MONSTER_BAND_TOP"])
 MONSTER_BAND_BOTTOM = int(cfg["MONSTER_BAND_BOTTOM"])
