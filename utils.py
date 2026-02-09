@@ -1,6 +1,6 @@
 ### utils.py
 import time, os, io, requests
-from win10toast_click import ToastNotifier
+import winsound
 import cv2, easyocr, torch
 import asyncio, telegram, threading, pyperclip, keyboard
 import numpy as np
@@ -60,10 +60,14 @@ def ocr_lie_detector(roi_bgr: np.ndarray):
         #log(f"[EasyOCR] 결과: {detected} | 인식텍스트: {text}")
 
         if detected:
-            toaster = ToastNotifier()
-            toaster.show_toast("알림 발생!",
-                            "작업이 완료되었습니다. 확인해 보세요.",
-                            duration=5) # 5초 동안 표시
+            try:
+                winsound.PlaySound(
+                    "alert1.wav",
+                    winsound.SND_FILENAME | winsound.SND_NODEFAULT
+                )
+                print("played OK (real wav)")
+            except RuntimeError as e:
+                print("FAILED:", e)
             log(f"{detected} | text: {text}", True)
             send_message("거짓말 탐지기 의심 단어 발생!!!")
 

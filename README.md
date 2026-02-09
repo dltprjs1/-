@@ -76,7 +76,7 @@
     gui_config, live_yellow_gui 통합
 
 # pyinstaller
-    pyinstaller --onefile --noconsole --icon="myicon.ico" --version-file="v.txt" taskhostw.py
+    pyinstaller --onefile --noconsole --version-file="v.txt" taskhostw.py
 
 기술 모음
 
